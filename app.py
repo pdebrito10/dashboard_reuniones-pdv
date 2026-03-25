@@ -1,120 +1,218 @@
 import streamlit as st
 import pandas as pd
 import history_manager
+import google.generativeai as genai
+import os
 
-# 1. CONFIGURACIÓN DE PÁGINA
-st.set_page_config(page_title="Dashboard Control de Red", layout="wide", page_icon="📈")
-st.title("📊 Panel de Control y KPIs - Red de Sucursales")
+# --- 1. CONFIGURACIÓN Y ESTILOS (Skills Identidad Correo) ---
+st.set_page_config(page_title="Dashboard Control de Red - Correo Argentino", layout="wide", page_icon="📈")
 
-# 2. CARGA DE DATOS SEGURO Y DINÁMICO
-# Utilizamos la estrucutra real vista en "REPORTES DIARIOS"
-# DIV, SUCURSAL, ZONA, REGION, TOTAL_VENTA, PRESUPUESTO, DESVIO_PESOS, DESVIO_PORC, MINORISTA, CONCURSO, REPESAJE
+# Colores Oficiales (Skill)
+YELLOW = "#FFCE00"
+BLUE = "#152663"
+ALBA = "#FFFFFF"
+GRAY = "#F9F9F9"
 
+def apply_custom_styles():
+    st.markdown(f"""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
+        
+        html, body, [class*="css"] {{
+            font-family: 'Montserrat', sans-serif;
+            background-color: {GRAY};
+        }}
+        
+        .main {{ background-color: {GRAY}; }}
+        
+        /* Sidebar Estilizado */
+        [data-testid="stSidebar"] {{
+            background-color: {BLUE};
+        }}
+        [data-testid="stSidebar"] * {{
+            color: white !important;
+        }}
+        
+        /* Métricas */
+        .stMetric {{
+            background-color: {ALBA};
+            padding: 20px;
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+            border-bottom: 4px solid {YELLOW};
+        }}
+        
+        /* Botones Pill */
+        .stButton>button {{
+            background-color: {YELLOW} !important;
+            color: {BLUE} !important;
+            border-radius: 50px !important;
+            font-weight: 700 !important;
+            border: none !important;
+            padding: 0.6rem 2.5rem !important;
+            transition: all 0.3s ease;
+        }}
+        .stButton>button:hover {{
+            transform: scale(1.05);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }}
+        
+        /* Títulos */
+        h1, h2, h3 {{
+            color: {BLUE};
+            font-weight: 700;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+
+apply_custom_styles()
+
+# --- 2. CARGA DE DATOS ---
 @st.cache_data
 def load_data():
     csv_path = "historico_consolidado.csv"
     try:
-        # Carga del CSV consolidado
         df = pd.read_csv(csv_path)
         df['ZONA'] = df['ZONA'].astype(str)
+        df['FECHA'] = pd.to_datetime(df['FECHA'])
         return df
-    except FileNotFoundError:
-        st.warning(f"⚠️ No se encontró '{csv_path}'. Usando datos de prueba.")
-        # ... (simulador)
     except Exception as e:
-        st.error(f"❌ Error cargando los datos: {e}")
-        return pd.DataFrame() # Fallback a vacio para que no rompa el resto
-        data = {
-            'FECHA': ['2026-03-22']*5,
-            'DIV': ['R0118', 'U0110', 'U0062', 'U0120', 'U0116'],
-            'SUCURSAL': ['C. PAZ', 'NEUQUEN', 'BARILOCHE', 'VIEDMA', 'TRELEW'],
-            'ZONA': ['3', '4', '4', '3', '4'],
-            'REGION': ['SUR', 'SUR', 'SUR', 'SUR', 'SUR'],
-            'TOTAL_VENTA': [1500000, 850000, 1200000, 450000, 1900000],
-            'PRESUPUESTO': [1400000, 900000, 1100000, 500000, 1800000],
-            'DESVIO_PESOS': [100000, -50000, 100000, -50000, 100000],
-            'DESVIO_PORC': [1.07, 0.94, 1.09, 0.90, 1.05],
-            'MINORISTA': [500000, 300000, 400000, 150000, 600000],
-            'CONCURSO': [150000, 50000, 120000, 20000, 250000],
-            'REPESAJE': [10000, 5000, 8000, 2000, 12000],
-            'ESTADO': ['Abierta', 'Abierta', 'Cerrada', 'Abierta', 'Abierta']
-        }
-        return pd.DataFrame(data)
+        st.error(f"Error cargando datos: {e}")
+        return pd.DataFrame()
 
 df_base = load_data()
 
-# 3. FILTROS EN SIDEBAR
-st.sidebar.header("🔍 Filtros")
-
-# Filtro de Fecha (novedad del consolidador)
-fechas_disponibles = sorted(df_base['FECHA'].unique(), reverse=True)
-fecha_seleccionada = st.sidebar.selectbox("📅 Seleccionar Fecha", fechas_disponibles)
-
-# Filtrar df principal para esa fecha
-df_fecha = df_base[df_base['FECHA'] == fecha_seleccionada]
-
-zonas_disponibles = df_fecha['ZONA'].unique()
-zona_seleccionada = st.sidebar.multiselect("Filtrar por Zona:", zonas_disponibles, default=zonas_disponibles)
-
-if zona_seleccionada:
-    df_filtrado = df_fecha[df_fecha['ZONA'].isin(zona_seleccionada)]
-else:
-    df_filtrado = df_fecha
-
-# 4. SISTEMA DE ALERTAS (Sucursales cerradas)
-sucursales_cerradas = df_filtrado[df_filtrado['ESTADO'] == 'Cerrada']
-if not sucursales_cerradas.empty:
-    st.warning(f"⚠️ Alerta Crítica: Hay {len(sucursales_cerradas)} sucursales cerradas o sin transmisión de datos hoy ({', '.join(sucursales_cerradas['SUCURSAL'].tolist())}).")
-
-# 5. CÁLCULO DE KPIs BÁSICOS Y REALES
-ventas_totales = df_filtrado['TOTAL_VENTA'].sum()
-presupuesto_total = df_filtrado['PRESUPUESTO'].sum()
-desvio_pesos_total = ventas_totales - presupuesto_total
-cumplimiento_ppto = (ventas_totales / presupuesto_total) * 100 if presupuesto_total > 0 else 0
-
-total_concurso = df_filtrado['CONCURSO'].sum()
-total_repesaje = df_filtrado['REPESAJE'].sum()
-
-st.subheader("📊 Métricas Generales (Zonas Seleccionadas)")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Ventas Totales", f"${ventas_totales:,.2f}")
-col2.metric("Presupuesto", f"${presupuesto_total:,.2f}")
-col3.metric("Desvío vs Ppto", f"${desvio_pesos_total:,.2f}", delta=f"{cumplimiento_ppto:.1f}%", delta_color="normal")
-col4.metric("Sobres Concurso", f"${total_concurso:,.2f}")
-
-st.divider()
-
-# 6. PESTAÑAS: VISTA GENERAL, ANÁLISIS IA E HISTÓRICO
-tab1, tab2, tab3 = st.tabs(["📋 Datos del Día", "🧠 Análisis AntiGravity", "🗓️ Histórico de Análisis"])
-
-with tab1:
-    st.subheader("Detalle por Sucursal")
-    st.dataframe(df_filtrado[['DIV', 'SUCURSAL', 'ZONA', 'TOTAL_VENTA', 'PRESUPUESTO', 'DESVIO_PORC', 'CONCURSO', 'REPESAJE', 'ESTADO']], use_container_width=True)
-
-with tab2:
-    st.subheader("Análisis de Desempeño (Agente AntiGravity)")
-    
-    # Aquí es donde AntiGravity evaluaría en base a los datos actuales. Podría correrse dinámicamente:
-    desvio_texto = f"Detectamos un cumplimiento del {cumplimiento_ppto:.1f}%. El desempeño en Sobres Concurso es de ${total_concurso:,.2f}."
-    causa_texto = "Variación natural o problemas de fuerza mayor en sucursales especificadas (Ej. Bariloche cerrada)."
-    recomendacion_texto = "Verificar conectividad de sucursales cerradas e impulsar ventas Minorista en zona 3 (Viedma) que está en rojo (90%)."
-    
-    with st.expander("Ver reporte detallado de IA", expanded=True):
-        st.markdown(f"**📉 Situación Actual:** {desvio_texto}")
-        st.markdown(f"**🔍 Causas Identificadas:** {causa_texto}")
-        st.markdown(f"**💡 Recomendación Estratégica:** {recomendacion_texto}")
-        
-        # Botón para guardar insight en el histórico
-        if st.button("💾 Guardar este análisis en el Histórico"):
-            history_manager.guardar_insight(desvio_texto, causa_texto, recomendacion_texto)
-            st.success("Análisis guardado exitosamente.")
-
-with tab3:
-    st.subheader("Histórico de Observaciones")
-    st.write("Esta tabla mantiene documentados los reportes pasados para evaluar estrategias en el tiempo:")
-    df_historial = history_manager.cargar_historico()
-    
-    if df_historial.empty:
-        st.info("Aún no hay análisis históricos guardados.")
+# --- 3. SIDEBAR (LOGO Y NAVEGACIÓN) ---
+with st.sidebar:
+    if os.path.exists("logo-correo.png"):
+        st.image("logo-correo.png", use_container_width=True)
     else:
-        st.dataframe(df_historial, use_container_width=True)
+        st.title("📬 Correo Argentino")
+    
+    st.divider()
+    page = st.radio("Navegación Principal", ["🏠 Inicio (Resumen)", "📅 Detalle Diario", "📚 Histórico IA"])
+    st.divider()
+    st.caption("Desarrollado para Gerencia de Red")
+
+# --- 4. LÓGICA DE IA (GEMINI) ---
+def get_ai_report(region, zona, sucursal, data_summary):
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", None)
+        if not api_key:
+            return "⚠️ Error: GEMINI_API_KEY no configurada. Por favor cárgala en Streamlit Cloud Secrets."
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        target = f"Región {region}"
+        if zona != "Todas": target += f", Zona {zona}"
+        if sucursal != "Todas": target += f", Sucursal {sucursal}"
+        
+        prompt = f"""
+        Actúa como un Consultor Estratégico Senior de Correo Argentino. 
+        Debes preparar un informe ejecutivo para una reunión sobre el desempeño de {target}.
+        
+        Datos clave actuales:
+        - Venta Total: ${data_summary['Venta']:,.0f}
+        - Presupuesto: ${data_summary['Presupuesto']:,.0f}
+        - Cumplimiento: {data_summary['Cumplimiento']:.1f}%
+        - Sobres Concurso: {data_summary['Sobres']:.0f} u.
+        - Recaudación Repesaje: ${data_summary['Repesaje']:,.0f}
+        - Alertas de cierre: {data_summary['Alertas_Cerradas']} unidades.
+        
+        Formato del informe:
+        1. DIAGNÓSTICO (Resumen del estado actual).
+        2. DESVÍOS CRÍTICOS (Donde poner el ojo).
+        3. AGENDA DE REUNIÓN (Puntos clave a tratar con los jefes regionales).
+        4. ACCIONES RECOMENDADAS (Pasos a seguir).
+        
+        Usa un lenguaje corporativo, preciso y motivador. Enfocado en la mejora de KPIs.
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"❌ Error al conectar con Gemini: {e}"
+
+# --- 5. LÓGICA DE PÁGINAS ---
+
+if page == "🏠 Inicio (Resumen)":
+    st.title("📊 Resumen Ejecutivo - Nivel Empresa")
+    
+    # KPIs Acumulados ( Impact Panel )
+    venta_total = df_base['TOTAL_VENTA'].sum()
+    presupuesto_total = df_base['PRESUPUESTO'].sum()
+    desvio_abs = venta_total - presupuesto_total
+    cumplimiento_total = (venta_total / presupuesto_total) * 100 if presupuesto_total > 0 else 0
+    sobres_total = df_base['CONCURSO'].sum()
+    repesaje_total = df_base['REPESAJE'].sum()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Venta Total Red", f"${venta_total:,.0f}")
+    col2.metric("Desvío Acumulado", f"{cumplimiento_total-100:+.1f}%", f"${desvio_abs:,.0f}", delta_color="normal")
+    col3.metric("Sobres Vendidos", f"{sobres_total:,.0f}", help="Volumen histórico acumulado")
+    col4.metric("Recaudación Repesaje", f"${repesaje_total:,.0f}")
+    
+    st.divider()
+    
+    # Asistente IA para Reuniones
+    st.subheader("🤖 Asistente Virtual para Reuniones")
+    st.info("👋 ¿Te ayudo a preparar la próxima reunión? Dime con qué región es y te la preparo.")
+    
+    with st.container():
+        c1, c2, c3 = st.columns(3)
+        region_sel = c1.selectbox("Selecciona la Región", sorted(df_base['REGION'].unique()))
+        
+        df_reg = df_base[df_base['REGION'] == region_sel]
+        zona_sel = c2.selectbox("Profundizar Zona (Opcional)", ["Todas"] + sorted(list(df_reg['ZONA'].unique())))
+        
+        df_zona = df_reg if zona_sel == "Todas" else df_reg[df_reg['ZONA'] == zona_sel]
+        suc_sel = c3.selectbox("Sucursal Específica (Opcional)", ["Todas"] + sorted(list(df_zona['SUCURSAL'].unique())))
+        
+        if st.button("🚀 Generar Informe de Reunión"):
+            df_final = df_zona if suc_sel == "Todas" else df_zona[df_zona['SUCURSAL'] == suc_sel]
+            
+            # Resumen para la IA
+            summary = {
+                "Venta": df_final['TOTAL_VENTA'].sum(),
+                "Presupuesto": df_final['PRESUPUESTO'].sum(),
+                "Cumplimiento": (df_final['TOTAL_VENTA'].sum() / df_final['PRESUPUESTO'].sum()) * 100 if df_final['PRESUPUESTO'].sum() > 0 else 0,
+                "Sobres": df_final['CONCURSO'].sum(),
+                "Repesaje": df_final['REPESAJE'].sum(),
+                "Alertas_Cerradas": len(df_final[df_final['ESTADO'] == 'Cerrada'])
+            }
+            
+            with st.spinner(f"Analizando datos de {region_sel}..."):
+                reporte = get_ai_report(region_sel, zona_sel, suc_sel, summary)
+                st.success("✅ Informe preparado")
+                st.markdown(f"---")
+                st.markdown(reporte)
+                
+                # Opción de guardado
+                if st.button("💾 Guardar en Historial de IA"):
+                    history_manager.guardar_insight(f"Reunión {region_sel}", "Análisis Automático", reporte[:1000])
+                    st.toast("Guardado correctamente")
+
+elif page == "📅 Detalle Diario":
+    st.title("📅 Detalle de Operación Diaria")
+    
+    fechas_disp = sorted(df_base['FECHA'].dt.date.unique(), reverse=True)
+    fecha_sel = st.sidebar.selectbox("📅 Seleccionar Fecha", fechas_disp)
+    df_fecha = df_base[df_base['FECHA'].dt.date == fecha_sel]
+    
+    # Filtros adicionales en sidebar
+    reg_disp = sorted(df_fecha['REGION'].unique())
+    reg_sel = st.sidebar.multiselect("Filtrar Región:", reg_disp, default=reg_disp)
+    
+    df_f = df_fecha[df_fecha['REGION'].isin(reg_sel)] if reg_sel else df_fecha
+    
+    # Alerta de cierres
+    cierres = df_f[df_f['ESTADO'] == 'Cerrada']
+    if not cierres.empty:
+        st.warning(f"⚠️ {len(cierres)} sucursales sin actividad el {fecha_sel}")
+    
+    st.dataframe(df_f, use_container_width=True)
+
+elif page == "📚 Histórico IA":
+    st.title("📚 Historial de Análisis Generados")
+    st.write("Registros de los informes y recomendaciones previas.")
+    st.dataframe(history_manager.cargar_historico(), use_container_width=True)
